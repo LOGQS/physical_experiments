@@ -1,0 +1,4 @@
+- The environment code (sim-to-real\golf-sim\env) is mostly ai generated then reviewed/polished by me because of time constraints. Main goal of the repo is to develop solutions even though having control and knowledge over your setup is important.
+- First solution is developed before reading any relevant prior work. Just trying out stuff to learn.
+- The idea in the environment is to have procedurally generated mini golf parkours with a hole to reach towards the end. Trying to randomize this as much as possible while the parkour being feasible and realistic.
+- In the procedural generation process, while some priors are clear, finding the sweet spot inside the tradeoff of constraint and creativity is hard. Basically the goal is to generate golf courses that seem like the ones from real life.

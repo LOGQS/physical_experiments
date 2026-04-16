@@ -1,0 +1,39 @@
+<mujoco model="golf">
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+
+  <visual>
+    <global offwidth="1280" offheight="960"/>
+    <headlight ambient=".3 .3 .3" diffuse=".5 .5 .5"/>
+    <rgba fog="1 1 1 0"/>
+    <map fogstart="10" fogend="20"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker"
+             rgb1=".15 .4 .15" rgb2=".2 .45 .2" width="512" height="512"/>
+    <texture name="sky" type="skybox" builtin="gradient"
+             rgb1=".6 .75 .9" rgb2=".3 .5 .7" width="512" height="512"/>
+    <material name="green" texture="grid" texrepeat="4 4" reflectance="0.05"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 4" dir="0 0 -1" diffuse=".8 .8 .8" specular=".2 .2 .2"/>
+    <light pos="2 2 3" dir="-1 -1 -2" diffuse=".4 .4 .4"/>
+
+    <geom name="ground" type="plane" size="2.5 2.5 0.01" material="green"
+          contype="0" conaffinity="0"/>
+
+    <geom name="wall_xp" type="box" pos=" 2.5 0 0.015" size="0.01 2.5 0.015" rgba=".4 .25 .15 1"/>
+    <geom name="wall_xn" type="box" pos="-2.5 0 0.015" size="0.01 2.5 0.015" rgba=".4 .25 .15 1"/>
+    <geom name="wall_yp" type="box" pos="0  2.5 0.015" size="2.5 0.01 0.015" rgba=".4 .25 .15 1"/>
+    <geom name="wall_yn" type="box" pos="0 -2.5 0.015" size="2.5 0.01 0.015" rgba=".4 .25 .15 1"/>
+
+    <body name="ball" pos="0 0 0.02135">
+      <joint name="ball_x" type="slide" axis="1 0 0"/>
+      <joint name="ball_y" type="slide" axis="0 1 0"/>
+      <geom name="ball_geom" type="sphere" size="0.02135"
+            mass="0.04593" rgba="1 1 1 1"
+            condim="3" friction="0 0 0" solref="0.002 0.5"/>
+    </body>
+  </worldbody>
+</mujoco>
