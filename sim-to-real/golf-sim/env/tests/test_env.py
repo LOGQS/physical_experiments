@@ -9,13 +9,30 @@ from env.src.golf import GolfEnv, DEFAULT_PARAMS, BALL_RADIUS
 from env.src.course import (
     HOLE_R,
     MAX_BOUNCES,
-    PATH_POST_CLEARANCE,
-    PATH_WALL_CLEARANCE,
-    CORRIDOR_OBSTACLE_POST_CLEARANCE,
-    CORRIDOR_OBSTACLE_WALL_CLEARANCE,
+    BALL_R,
+    MIN_GAP,
+    OBSTACLE_WALL_SPACING,
+    OBSTACLE_POST_SPACING,
     _distribute_segment_budget,
     generate_course,
 )
+
+
+# Clearance thresholds scale with the course's (randomized) wall_t.
+def _path_wall_clearance(spec):
+    return BALL_R + MIN_GAP + spec.get("wall_t", 0.03) + 0.06
+
+
+def _path_post_clearance(spec):
+    return BALL_R + MIN_GAP + 0.06
+
+
+def _corridor_obstacle_wall_clearance(spec):
+    return 2 * spec.get("wall_t", 0.03) + OBSTACLE_WALL_SPACING
+
+
+def _corridor_obstacle_post_clearance(spec):
+    return spec.get("wall_t", 0.03) + OBSTACLE_POST_SPACING
 
 SEED = 42
 GEOM_TOL = 1e-6
@@ -274,19 +291,21 @@ def test_walls_only_touch_at_endpoints():
 def test_obstacles_stay_clear_of_solution_path():
     for seed in range(40):
         spec = generate_course(seed)
+        path_wall = _path_wall_clearance(spec)
+        path_post = _path_post_clearance(spec)
         path_nodes = [spec["start"]] + spec["waypoints"][1:-1] + [spec["hole"]]
         path_segments = list(zip(path_nodes[:-1], path_nodes[1:]))
 
         for wall in spec["obstacle_walls"]:
             w0, w1 = _wall_endpoints(wall)
             for p0, p1 in path_segments:
-                assert _seg_dist(w0, w1, p0, p1) >= PATH_WALL_CLEARANCE - 1e-6, (
+                assert _seg_dist(w0, w1, p0, p1) >= path_wall - 1e-6, (
                     f"seed {seed}: obstacle wall too close to solution path"
                 )
 
         for center, radius in spec["obstacle_posts"]:
             for p0, p1 in path_segments:
-                assert _point_seg_dist(center, p0, p1) >= radius + PATH_POST_CLEARANCE - 1e-6, (
+                assert _point_seg_dist(center, p0, p1) >= radius + path_post - 1e-6, (
                     f"seed {seed}: obstacle post blocks solution path"
                 )
 
@@ -314,6 +333,8 @@ def test_obstacle_budget_spreads_across_segments():
 def test_obstacles_stay_clear_of_corridor_walls():
     for seed in range(40):
         spec = generate_course(seed)
+        co_wall = _corridor_obstacle_wall_clearance(spec)
+        co_post = _corridor_obstacle_post_clearance(spec)
         corridor_count = len(spec["walls"]) - len(spec["obstacle_walls"])
         corridor_walls = spec["walls"][:corridor_count]
 
@@ -321,14 +342,14 @@ def test_obstacles_stay_clear_of_corridor_walls():
             w0, w1 = _wall_endpoints(obstacle_wall)
             for corridor_wall in corridor_walls:
                 c0, c1 = _wall_endpoints(corridor_wall)
-                assert _seg_dist(w0, w1, c0, c1) >= CORRIDOR_OBSTACLE_WALL_CLEARANCE - 1e-6, (
+                assert _seg_dist(w0, w1, c0, c1) >= co_wall - 1e-6, (
                     f"seed {seed}: obstacle wall overlaps corridor wall"
                 )
 
         for center, radius in spec["obstacle_posts"]:
             for corridor_wall in corridor_walls:
                 c0, c1 = _wall_endpoints(corridor_wall)
-                assert _point_seg_dist(center, c0, c1) >= radius + CORRIDOR_OBSTACLE_POST_CLEARANCE - 1e-6, (
+                assert _point_seg_dist(center, c0, c1) >= radius + co_post - 1e-6, (
                     f"seed {seed}: obstacle post overlaps corridor wall"
                 )
 

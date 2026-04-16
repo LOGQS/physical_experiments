@@ -6,7 +6,10 @@ import mujoco
 _here = Path(__file__).parent
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
-from course import generate_course, HOLE_R, WALL_H, WALL_T, BOUNCE_RESTITUTION
+from course import (
+    generate_course, HOLE_R, BOUNCE_RESTITUTION,
+    WALL_H as _DEFAULT_WALL_H, WALL_T as _DEFAULT_WALL_T,
+)
 
 BALL_RADIUS = 0.02135
 BALL_MASS = 0.04593
@@ -26,6 +29,8 @@ _BASE_XML = (_here / "golf.xml").read_text()
 
 
 def _build_xml(spec):
+    wall_h = spec.get("wall_h", _DEFAULT_WALL_H)
+    wall_t = spec.get("wall_t", _DEFAULT_WALL_T)
     lines = []
     for i, (pos, angle, hl) in enumerate(spec["walls"]):
         if hl <= 0:
@@ -33,16 +38,16 @@ def _build_xml(spec):
         p1, p2 = _wall_endpoints((pos, angle, hl))
         lines.append(
             f'    <geom name="obs_{i}" type="capsule" '
-            f'fromto="{p1[0]:.4f} {p1[1]:.4f} {WALL_H / 2:.4f} '
-            f'{p2[0]:.4f} {p2[1]:.4f} {WALL_H / 2:.4f}" '
-            f'size="{WALL_T:.4f}" rgba=".55 .35 .18 1" '
+            f'fromto="{p1[0]:.4f} {p1[1]:.4f} {wall_h / 2:.4f} '
+            f'{p2[0]:.4f} {p2[1]:.4f} {wall_h / 2:.4f}" '
+            f'size="{wall_t:.4f}" rgba=".55 .35 .18 1" '
             f'contype="0" conaffinity="0"/>'
         )
     for i, (pos, radius) in enumerate(spec["posts"]):
         lines.append(
             f'    <geom name="post_{i}" type="cylinder" '
-            f'pos="{pos[0]:.4f} {pos[1]:.4f} {WALL_H / 2:.4f}" '
-            f'size="{radius:.4f} {WALL_H / 2:.4f}" rgba=".6 .6 .6 1" '
+            f'pos="{pos[0]:.4f} {pos[1]:.4f} {wall_h / 2:.4f}" '
+            f'size="{radius:.4f} {wall_h / 2:.4f}" rgba=".6 .6 .6 1" '
             f'contype="0" conaffinity="0"/>'
         )
     h = spec["hole"]
@@ -170,12 +175,13 @@ class GolfEnv:
                 if np.linalg.norm(np.array(b) - np.array(a)) > 1e-12
             ]
             self._wall_segments.extend(self._boundary_segments())
+            wall_t = spec.get("wall_t", _DEFAULT_WALL_T)
             self._wall_capsules = []
             for wall in spec["obstacle_walls"]:
                 a, b = _wall_endpoints(wall)
                 if np.linalg.norm(b - a) <= 1e-12:
                     continue
-                self._wall_capsules.append((a, b, WALL_T + BALL_RADIUS))
+                self._wall_capsules.append((a, b, wall_t + BALL_RADIUS))
             self._posts = [
                 (np.array(pos, dtype=float), radius + BALL_RADIUS)
                 for pos, radius in spec["posts"]

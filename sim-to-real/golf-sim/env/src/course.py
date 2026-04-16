@@ -25,7 +25,39 @@ COURSE_OBSTACLE_BUDGET_PER_M = 1.1
 SEGMENT_PATTERN_MAX = 2
 
 
+_RANDOMIZED_GLOBALS = (
+    "CORRIDOR_W", "WALL_H", "WALL_T", "MIN_CLEARANCE",
+    "PATH_WALL_CLEARANCE", "CORRIDOR_OBSTACLE_WALL_CLEARANCE",
+    "CORRIDOR_OBSTACLE_POST_CLEARANCE",
+    "COURSE_OBSTACLE_BUDGET_BASE", "COURSE_OBSTACLE_BUDGET_PER_M",
+    "SEGMENT_PATTERN_MAX", "OBSTACLE_EDGE_MARGIN",
+)
+
+
+def _sample_cfg(rng):
+    """Sample per-course scene parameters. Ranges chosen so all archetypes
+    still satisfy miter-reach and arena-fit constraints."""
+    return {
+        "corridor_w":     float(rng.uniform(0.25, 0.38)),
+        "wall_h":         float(rng.uniform(0.035, 0.11)),
+        "wall_t":         float(rng.uniform(0.02, 0.045)),
+        "min_clearance":  float(rng.uniform(0.10, 0.25)),
+        "obstacle_base":  float(rng.uniform(1.0, 3.2)),
+        "obstacle_per_m": float(rng.uniform(0.5, 1.6)),
+        "segment_pattern_max": int(rng.choice([1, 2, 3])),
+        "obstacle_edge_margin": float(rng.uniform(0.15, 0.30)),
+    }
+
+
 def generate_course(seed=None, n_bounces=None):
+    global CORRIDOR_W, WALL_H, WALL_T, MIN_CLEARANCE
+    global PATH_WALL_CLEARANCE, CORRIDOR_OBSTACLE_WALL_CLEARANCE
+    global CORRIDOR_OBSTACLE_POST_CLEARANCE
+    global COURSE_OBSTACLE_BUDGET_BASE, COURSE_OBSTACLE_BUDGET_PER_M
+    global SEGMENT_PATTERN_MAX, OBSTACLE_EDGE_MARGIN
+
+    saved = {name: globals()[name] for name in _RANDOMIZED_GLOBALS}
+
     rng = np.random.default_rng(seed)
     if n_bounces is None:
         target_bounces = int(rng.integers(0, MAX_BOUNCES + 1))
@@ -34,49 +66,70 @@ def generate_course(seed=None, n_bounces=None):
         if not 0 <= target_bounces <= MAX_BOUNCES:
             raise ValueError(f"n_bounces must be in [0, {MAX_BOUNCES}]")
 
-    archetype = None
-    for _ in range(1000):
-        result = _make_bounce_path(rng, target_bounces)
-        if result is None:
-            continue
-        waypoints, archetype = result
-        if not _path_valid(waypoints):
-            continue
-        corridor_walls = _corridor(waypoints)
-        if not _walls_valid(corridor_walls):
-            continue
-        collision_walls = _corridor_collision_walls(waypoints)
-        break
-    else:
-        raise RuntimeError(f"failed to generate a {target_bounces}-bounce course")
+    cfg = _sample_cfg(rng)
+    CORRIDOR_W = cfg["corridor_w"]
+    WALL_H = cfg["wall_h"]
+    WALL_T = cfg["wall_t"]
+    MIN_CLEARANCE = cfg["min_clearance"]
+    COURSE_OBSTACLE_BUDGET_BASE = cfg["obstacle_base"]
+    COURSE_OBSTACLE_BUDGET_PER_M = cfg["obstacle_per_m"]
+    SEGMENT_PATTERN_MAX = cfg["segment_pattern_max"]
+    OBSTACLE_EDGE_MARGIN = cfg["obstacle_edge_margin"]
+    PATH_WALL_CLEARANCE = BALL_R + MIN_GAP + WALL_T + 0.06
+    CORRIDOR_OBSTACLE_WALL_CLEARANCE = 2 * WALL_T + OBSTACLE_WALL_SPACING
+    CORRIDOR_OBSTACLE_POST_CLEARANCE = WALL_T + OBSTACLE_POST_SPACING
 
-    fwd = waypoints[1] - waypoints[0]
-    fwd /= np.linalg.norm(fwd)
-    start = waypoints[0] + MIN_CLEARANCE * fwd
+    try:
+        archetype = None
+        for _ in range(1000):
+            result = _make_bounce_path(rng, target_bounces)
+            if result is None:
+                continue
+            waypoints, archetype = result
+            if not _path_valid(waypoints):
+                continue
+            corridor_walls = _corridor(waypoints)
+            if not _walls_valid(corridor_walls):
+                continue
+            collision_walls = _corridor_collision_walls(waypoints)
+            break
+        else:
+            raise RuntimeError(f"failed to generate a {target_bounces}-bounce course")
 
-    bwd = waypoints[-2] - waypoints[-1]
-    bwd /= np.linalg.norm(bwd)
-    hole = waypoints[-1] + MIN_CLEARANCE * bwd
+        fwd = waypoints[1] - waypoints[0]
+        fwd /= np.linalg.norm(fwd)
+        start = waypoints[0] + MIN_CLEARANCE * fwd
 
-    bump_walls, posts, obstacle_patterns = _obstacles(
-        rng, waypoints, start, hole, corridor_walls
-    )
+        bwd = waypoints[-2] - waypoints[-1]
+        bwd /= np.linalg.norm(bwd)
+        hole = waypoints[-1] + MIN_CLEARANCE * bwd
 
-    solution_vel = _compute_solution_velocity(waypoints, start, hole)
+        bump_walls, posts, obstacle_patterns = _obstacles(
+            rng, waypoints, start, hole, corridor_walls
+        )
 
-    return {
-        "start": start, "hole": hole,
-        "walls": corridor_walls + bump_walls,
-        "collision_walls": collision_walls,
-        "posts": posts,
-        "obstacle_walls": bump_walls,
-        "obstacle_posts": posts,
-        "obstacle_patterns": obstacle_patterns,
-        "waypoints": waypoints,
-        "n_bounces": target_bounces,
-        "archetype": archetype,
-        "solution_velocity": solution_vel,
-    }
+        solution_vel = _compute_solution_velocity(waypoints, start, hole)
+
+        return {
+            "start": start, "hole": hole,
+            "walls": corridor_walls + bump_walls,
+            "collision_walls": collision_walls,
+            "posts": posts,
+            "obstacle_walls": bump_walls,
+            "obstacle_posts": posts,
+            "obstacle_patterns": obstacle_patterns,
+            "waypoints": waypoints,
+            "n_bounces": target_bounces,
+            "archetype": archetype,
+            "solution_velocity": solution_vel,
+            "corridor_w": CORRIDOR_W,
+            "wall_h": WALL_H,
+            "wall_t": WALL_T,
+            "min_clearance": MIN_CLEARANCE,
+        }
+    finally:
+        for name, val in saved.items():
+            globals()[name] = val
 
 
 # --- path: archetype library ---
@@ -102,7 +155,7 @@ def _make_bounce_path(rng, n_bounces):
 
 
 def _finalize(rng, local_wps):
-    bound = ARENA - CORRIDOR_W - 0.15
+    bound = ARENA - CORRIDOR_W - MIN_CLEARANCE
     local_arr = np.array(local_wps)
     theta = rng.uniform(0, 2 * np.pi)
     c, s = np.cos(theta), np.sin(theta)
