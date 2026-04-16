@@ -22,9 +22,6 @@ if sys.platform == "win32":
                 _user32.ShowWindow(hwnd, _SW_MAXIMIZE)
                 return
             time.sleep(delay)
-else:
-    def _maximize_foreground_window(retries=0, delay=0.0):
-        del retries, delay
 
 seed = int(sys.argv[1]) if len(sys.argv) > 1 else None
 

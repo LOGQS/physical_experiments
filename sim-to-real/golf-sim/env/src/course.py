@@ -9,7 +9,7 @@ BALL_R = 0.02135
 MIN_CLEARANCE = 0.15
 MIN_GAP = BALL_R * 3
 BOUNCE_RESTITUTION = 0.98
-MAX_BOUNCES = 8
+MAX_BOUNCES = 6
 OBSTACLE_CLEARANCE = BALL_R + MIN_GAP + 0.02
 OBSTACLE_BOUNDARY_MARGIN = 0.04
 OBSTACLE_EDGE_MARGIN = 0.22
@@ -34,9 +34,13 @@ def generate_course(seed=None, n_bounces=None):
         if not 0 <= target_bounces <= MAX_BOUNCES:
             raise ValueError(f"n_bounces must be in [0, {MAX_BOUNCES}]")
 
-    for _ in range(200):
-        waypoints = _make_bounce_path(rng, target_bounces)
-        if waypoints is None or not _path_valid(waypoints):
+    archetype = None
+    for _ in range(1000):
+        result = _make_bounce_path(rng, target_bounces)
+        if result is None:
+            continue
+        waypoints, archetype = result
+        if not _path_valid(waypoints):
             continue
         corridor_walls = _corridor(waypoints)
         if not _walls_valid(corridor_walls):
@@ -70,87 +74,232 @@ def generate_course(seed=None, n_bounces=None):
         "obstacle_patterns": obstacle_patterns,
         "waypoints": waypoints,
         "n_bounces": target_bounces,
+        "archetype": archetype,
         "solution_velocity": solution_vel,
     }
 
 
-# --- path ---
+# --- path: archetype library ---
+#
+# Each archetype builds a small set of local-coordinate waypoints with its own
+# shape rules (lengths, turn signs, turn magnitudes). `_finalize` then rotates
+# the local path by a random heading and shifts it into the arena.
+# The global `_angles_ok` and `_segments_ok` are loose safety nets — each
+# archetype is responsible for staying within its intended geometry.
 
 def _make_bounce_path(rng, n_bounces):
-    bound = ARENA - CORRIDOR_W - 0.15
-    n_segments = n_bounces + 1
+    name, local_wps = _pick_archetype(rng, n_bounces)
+    if local_wps is None:
+        return None
+    waypoints = _finalize(rng, local_wps)
+    if waypoints is None:
+        return None
+    if not _segments_ok(waypoints):
+        return None
+    if not _angles_ok(waypoints):
+        return None
+    return waypoints, name
 
-    # Choose a total forward span that stays feasible inside the arena while
-    # still keeping low-bounce layouts long enough to read like real holes.
-    min_total = 2.0 + 0.15 * max(0, n_bounces - 2)
-    max_total = min(4.2, 2.8 + 0.28 * n_bounces)
-    min_dx = max(0.24, min_total / n_segments)
-    max_dx = min(2.2, max_total / n_segments)
-    if min_dx > max_dx:
+
+def _finalize(rng, local_wps):
+    bound = ARENA - CORRIDOR_W - 0.15
+    local_arr = np.array(local_wps)
+    theta = rng.uniform(0, 2 * np.pi)
+    c, s = np.cos(theta), np.sin(theta)
+    R = np.array([[c, -s], [s, c]])
+
+    rotated = (R @ local_arr.T).T
+    mins = rotated.min(axis=0)
+    maxs = rotated.max(axis=0)
+    if np.any(maxs - mins > 2 * bound):
         return None
 
-    for _ in range(200):
-        theta = rng.uniform(0, 2 * np.pi)
-        fwd = np.array([np.cos(theta), np.sin(theta)])
-        perp = np.array([-fwd[1], fwd[0]])
+    shift_lo = -bound - mins
+    shift_hi = bound - maxs
+    shift = rng.uniform(shift_lo, shift_hi)
+    pts = rotated + shift
+    return [np.array(p) for p in pts]
 
-        dx_base = rng.uniform(min_dx, max_dx)
-        dx_steps = rng.uniform(0.85, 1.15, size=n_segments)
-        dx_steps *= (dx_base * n_segments) / dx_steps.sum()
 
-        if n_bounces == 0:
-            y_vals = np.zeros(2)
-        else:
-            amp_base = rng.uniform(0.32 * dx_base, 0.65 * dx_base)
-            first_side = rng.choice([-1, 1])
-            y_vals = [0.0]
-            for i in range(n_bounces):
-                side = first_side * ((-1) ** i)
-                amp = amp_base * rng.uniform(0.8, 1.2)
-                y_vals.append(side * amp)
-            y_vals.append(0.0)
-            y_vals = np.array(y_vals)
+def _path_from_headings(segment_lengths, turn_angles):
+    heading = 0.0
+    pos = np.array([0.0, 0.0])
+    pts = [pos.copy()]
+    for i, length in enumerate(segment_lengths):
+        d = np.array([np.cos(heading), np.sin(heading)])
+        pos = pos + length * d
+        pts.append(pos.copy())
+        if i < len(turn_angles):
+            heading += turn_angles[i]
+    return pts
 
-        x_vals = np.concatenate(([0.0], np.cumsum(dx_steps)))
-        x_vals -= x_vals[-1] / 2
 
-        local_pts = [x * fwd + y * perp for x, y in zip(x_vals, y_vals)]
-        pts = np.array(local_pts)
+def _straight(rng):
+    return [np.array([0.0, 0.0]), np.array([rng.uniform(2.2, 3.3), 0.0])]
 
-        mins = pts.min(axis=0)
-        maxs = pts.max(axis=0)
-        if np.any(maxs - mins > 2 * bound):
-            continue
 
-        shift_lo = -bound - mins
-        shift_hi = bound - maxs
-        shift = rng.uniform(shift_lo, shift_hi)
-        pts = pts + shift
+def _two_seg(rng, turn_deg, total_range, ratio_range=(0.22, 0.78)):
+    # Total path length + U-shaped split → bounce lands anywhere between 1/4
+    # and 3/4 of the way along start→hole, not locked near the midpoint.
+    total = rng.uniform(*total_range)
+    ratio = float(np.clip(rng.beta(0.7, 0.7), *ratio_range))
+    d1 = total * ratio
+    d2 = total * (1 - ratio)
+    side = rng.choice([-1, 1])
+    return _path_from_headings([d1, d2], [side * np.radians(turn_deg)])
 
-        pts = [np.array(p) for p in pts]
-        if not _segments_ok(pts):
-            continue
-        if not _angles_ok(pts):
-            continue
-        return pts
 
-    return None
+def _three_seg(rng, a1_deg, a2_deg, t1_sign, t2_sign, total_range):
+    # Each segment reserves a miter-reach-safe minimum; the remainder is
+    # distributed by Dirichlet(0.8), which concentrates mass at one or two
+    # segments so bounces cluster/spread instead of sitting at 1/3, 2/3.
+    r1 = CORRIDOR_W * np.tan(np.radians(a1_deg) / 2)
+    r2 = CORRIDOR_W * np.tan(np.radians(a2_deg) / 2)
+    mins = [
+        max(0.35, r1 * 1.15),
+        max(0.35, (r1 + r2) * 1.15),
+        max(0.35, r2 * 1.15),
+    ]
+    reserved = sum(mins)
+    lo = max(total_range[0], reserved + 0.3)
+    hi = total_range[1]
+    if lo > hi:
+        return None
+    total = rng.uniform(lo, hi)
+    extra = total - reserved
+    ratios = rng.dirichlet([0.8, 0.8, 0.8])
+    segs = [m + r * extra for m, r in zip(mins, ratios)]
+    return _path_from_headings(segs, [t1_sign * np.radians(a1_deg),
+                                      t2_sign * np.radians(a2_deg)])
+
+
+def _dogleg(rng):
+    # Beta(2.5, 2.5) is bell-shaped around 0.5 → turn concentrates near 90°,
+    # the "clean L" most mini-golf doglegs use. Still reaches 70° and 115°.
+    turn_deg = 70 + 45 * float(rng.beta(2.5, 2.5))
+    return _two_seg(rng, turn_deg, (2.2, 3.6))
+
+
+def _hairpin(rng):
+    # Kept as direct sampling because we need d2 < d1 (return leg shorter)
+    # and a specific start-hole separation. Still widened: d2/d1 ratio varies
+    # 0.2 → 0.55 instead of the old near-fixed ~0.5.
+    d1 = rng.uniform(1.8, 2.6)
+    d2 = rng.uniform(0.4, d1 * 0.55)
+    side = rng.choice([-1, 1])
+    turn = side * np.radians(rng.uniform(140, 165))
+    return _path_from_headings([d1, d2], [turn])
+
+
+def _bank(rng):
+    return _two_seg(rng, rng.uniform(30, 60), (2.6, 3.4))
+
+
+def _s_curve(rng):
+    side = rng.choice([-1, 1])
+    return _three_seg(rng, rng.uniform(60, 100), rng.uniform(60, 100),
+                      side, -side, (2.4, 4.0))
+
+
+def _cardinal(rng):
+    side = rng.choice([-1, 1])
+    return _three_seg(rng, rng.uniform(45, 75), rng.uniform(45, 75),
+                      side, side, (2.2, 3.4))
+
+
+def _pocket(rng):
+    side = rng.choice([-1, 1])
+    return _three_seg(rng, rng.uniform(50, 95), rng.uniform(95, 135),
+                      side, -side, (2.2, 3.6))
+
+
+def _zigzag(rng, n_bounces):
+    # Ranges tuned empirically so miter corners don't overlap
+    # (need seg > 2 * CORRIDOR_W * tan(turn/2)) and the folded path still fits
+    # the arena. Bigger bounce counts need shorter segments and sharper turns.
+    if n_bounces <= 3:
+        seg_min, seg_cap = 0.88, 1.25
+        turn_min, turn_max = 70, 115
+    elif n_bounces == 4:
+        seg_min, seg_cap = 0.7, 1.0
+        turn_min, turn_max = 70, 95
+    elif n_bounces == 5:
+        seg_min, seg_cap = 0.7, 1.0
+        turn_min, turn_max = 85, 115
+    else:
+        seg_min, seg_cap = 0.6, 0.85
+        turn_min, turn_max = 85, 100
+
+    segs = list(rng.uniform(seg_min, seg_cap, size=n_bounces + 1))
+    side = rng.choice([-1, 1])
+    turns = []
+    for _ in range(n_bounces):
+        turns.append(side * np.radians(rng.uniform(turn_min, turn_max)))
+        side = -side
+    return _path_from_headings(segs, turns)
+
+
+def _spiral(rng, n_bounces):
+    # All turns same side → consistent curl (n=3 only: 4+ same-side bounces
+    # always have non-adjacent outer walls cross in this arena/corridor).
+    # Two modes: uniform segments (even curl) and decreasing segments that
+    # curl inward like a nautilus.
+    if n_bounces != 3:
+        return None
+    side = rng.choice([-1, 1])
+    total_rot_deg = float(rng.uniform(150, 210))
+    base_deg = total_rot_deg / n_bounces
+    turns = [side * np.radians(base_deg + float(rng.uniform(-6, 6)))
+             for _ in range(n_bounces)]
+    seg_base = float(rng.uniform(1.2, 1.5))
+    if rng.random() < 0.5:
+        segs = [seg_base * (1.25 - 0.15 * i) for i in range(n_bounces + 1)]
+        segs = [s * float(rng.uniform(0.9, 1.1)) for s in segs]
+    else:
+        segs = list(rng.uniform(seg_base * 0.85, seg_base * 1.1, size=n_bounces + 1))
+    return _path_from_headings(segs, turns)
+
+
+_ARCHETYPES = {
+    0: [(_straight, 1.0)],
+    1: [(_dogleg, 3.0), (_hairpin, 1.0), (_bank, 2.0)],
+    2: [(_s_curve, 2.0), (_cardinal, 1.5), (_pocket, 1.5)],
+}
+
+
+def _pick_archetype(rng, n_bounces):
+    if n_bounces in _ARCHETYPES:
+        choices = _ARCHETYPES[n_bounces]
+        fns = [c[0] for c in choices]
+        weights = np.array([c[1] for c in choices], dtype=float)
+        weights /= weights.sum()
+        idx = int(rng.choice(len(fns), p=weights))
+        fn = fns[idx]
+        return fn.__name__.lstrip("_"), fn(rng)
+    # 3+ bounces: zigzag always; spiral also available at n=3 (same-side curl
+    # only fits the arena without wall overlap at 3 bounces).
+    if n_bounces == 3 and rng.random() < 0.45:
+        return "spiral", _spiral(rng, n_bounces)
+    return "zigzag", _zigzag(rng, n_bounces)
 
 
 def _segments_ok(pts):
     for i in range(len(pts) - 1):
         d = np.linalg.norm(pts[i + 1] - pts[i])
-        if d < 0.3 or d > 2.5:
+        if d < 0.3 or d > 3.5:
             return False
     return True
 
 
 def _angles_ok(pts):
+    # Loose guardrail: rejects near-parallel (<~23°) and near-reversed (>~168°)
+    # turns that would produce degenerate corridor geometry. Individual
+    # archetypes stay well inside these bounds.
     for i in range(1, len(pts) - 1):
         d_in = pts[i] - pts[i - 1]
         d_out = pts[i + 1] - pts[i]
         cos_a = np.dot(d_in, d_out) / (np.linalg.norm(d_in) * np.linalg.norm(d_out))
-        if cos_a > 0.5 or cos_a < -0.5:
+        if cos_a > 0.92 or cos_a < -0.98:
             return False
     return True
 
